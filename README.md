@@ -117,12 +117,77 @@ lerobot-train \
 - 推理时必须用与训练一致的相机顺序（按 key 字母序：`top` → camera2，
   `wrist_cam` → camera1）。
 
+## 策略推理评估
+
+训练完成后把 checkpoint 放回本机，用 `controllers/so101_policy_eval.py` 闭环执行分拣。
+
+### 取得权重
+
+`model.safetensors`（865MB）超过 GitHub 单文件 100MB 限制，作为 Release 资产分发；
+配置、归一化统计与 tokenizer 已在本仓库 `models/` 下：
+
+```bash
+git clone https://github.com/jerryzhu-yc/so101-smolvla-demo.git
+cd so101-smolvla-demo
+curl -L -o models/so101_sort2_20k/model.safetensors \
+  https://github.com/jerryzhu-yc/so101-smolvla-demo/releases/download/v1.0.0/model.safetensors
+```
+
+### 运行
+
+```bash
+# 无头
+python -m simovia run worlds/so101_policy_eval.yaml
+
+# 带画面：GUI 里加载 worlds/so101_policy_eval.yaml
+python -m simovia gui
+```
+
+推理需要 lerobot 0.7.0 + CUDA 版 torch。若 GUI 是从没装 lerobot 的解释器启动的，
+控制器会自动 `os.execv` 切到装了 lerobot 的解释器（PID 不变，ZMQ 连接保留）。
+目标解释器默认 `~/miniconda3/envs/smolvla/bin/python`，可用环境变量
+`SIMOVIA_POLICY_PY` 覆盖。
+
+> smolvla 环境还需要 `pyzmq`（控制器与内核通信）：
+> `pip install pyzmq`
+
+### 推理链路要点
+
+- 一次推理出 50 步 action chunk（未来 1.6s），逐拍执行，队列空再推：单次推理
+  116ms，摊薄后每拍只占 2.3ms。**不能每拍推理**——116ms 对 32ms 控制周期会让
+  仿真持续补位、动作卡顿
+- action 是**绝对关节目标**（5 臂 + 夹爪 ctrl），不是增量，反归一化后直接
+  `set_all`，无积分无累积
+- 启动先 ramp 到 `PRE_Q5` 预备姿态，与采集时每集起始帧完全一致。从零位直接推理
+  属于分布外输入，且移动路径可能扫翻方块
+- 相机走 checkpoint 内置 rename 预处理：`wrist_cam → camera1`、`top → camera2`，
+  与训练一致。`camera3` 槽位因 `empty_cameras=0` 会被自动跳过，只喂两路即可
+- 每次推理把两路相机帧转发到 GUI 预览面板，可直接核对策略眼中的画面
+
+### 实测表现与已知限制
+
+| 项 | 结果 |
+| --- | --- |
+| 训练 | 50 集 / 20247 帧 / 20000 步，31.61 epoch，final loss 0.035 |
+| 推理耗时 | 116ms 每 chunk（RTX 5070，显存 0.91GB） |
+| 固定布局 | 红、蓝方块均可完成分拣 |
+
+**位置泛化是当前主要短板**：50 集数据的物体初始位置完全固定
+（`reset_objects` 严格恢复 `qpos0`，无任何随机化），模型学到的是「固定布局上的
+轨迹 + 视觉微调」，而不是「搜索任意位置的彩色物体」。把红蓝方块互换后，红块
+仍能被抓起（说明视觉通路有效），但蓝块会失败并反复在原红块位置重试。
+
+治本方案是在采集时做域随机化（物体 XY 偏移 + 随机 yaw），重采 100 集左右再训练。
+
 ## 目录
 
 ```
-worlds/so101_pico_sort.yaml        世界：桌面、双方块、双盒子、固定俯视机位
+worlds/so101_pico_sort.yaml        采集世界：桌面、双方块、双盒子、固定俯视机位
+worlds/so101_policy_eval.yaml      评估世界：场景与采集一致，控制器换成策略推理
 controllers/so101_pico_teleop.py   PICO 遥操作 + OSC + 录制 + 自动复位
 controllers/so101_pico_webxr.html  头显页面（WebXR 手柄采集与回传）
+controllers/so101_policy_eval.py   SmolVLA 推理控制器（chunk 执行 + 相机预览）
+models/so101_sort2_20k/            训练产出的策略配置、归一化统计、tokenizer
 ```
 
 ## 场景参数

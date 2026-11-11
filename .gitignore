@@ -8,3 +8,6 @@ MUJOCO_LOG.TXT
 so101_smolvla_*/
 outputs/
 *.mp4
+
+# 模型权重 865MB，超过 GitHub 单文件 100MB 限制，走 Release 资产下载
+models/*/model.safetensors

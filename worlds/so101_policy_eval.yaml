@@ -1,0 +1,98 @@
+name: so101_policy_eval       # SO-101 SmolVLA 策略闭环评估（场景与训练采集时完全一致）
+timestep: 0.002
+ctrl_period: 16               # 必须与采集数据集一致：0.032s -> 31.25Hz
+gravity: [0, 0, -9.81]
+integrator: implicitfast
+impratio: 10
+cone: elliptic
+
+scene:
+  floor:
+    size: [2.0, 2.0]
+    texture: grid
+    friction: 1.0
+  lights:
+    - {pos: [0, 0, 1.2]}
+
+  # 固定俯视机位：训练时作为 camera2 输入，位置/角度不能改，
+  # 否则策略看到的画面分布与训练不符
+  cameras:
+    - name: top
+      pos: [0.419, 0.0, 0.430]
+      euler: [0, 40, 90]
+      fovy: 60
+
+  objects:
+    - name: table
+      type: box
+      size: [0.30, 0.20, 0.02]
+      pos: [0.20, 0, 0.14]
+      color: "#6B7280"
+      static: true
+    - {name: table_leg_0, type: box, size: [0.025, 0.025, 0.06], pos: [-0.08, -0.17, 0.06], color: "#6B7280", static: true}
+    - {name: table_leg_1, type: box, size: [0.025, 0.025, 0.06], pos: [0.48, -0.17, 0.06], color: "#6B7280", static: true}
+    - {name: table_leg_2, type: box, size: [0.025, 0.025, 0.06], pos: [-0.08, 0.17, 0.06], color: "#6B7280", static: true}
+    - {name: table_leg_3, type: box, size: [0.025, 0.025, 0.06], pos: [0.48, 0.17, 0.06], color: "#6B7280", static: true}
+
+    - name: cube_red
+      type: box
+      size: [0.02, 0.02, 0.02]
+      pos: [0.22, -0.04, 0.18]
+      color: "#EF4444"
+      mass: 0.03
+      friction: 1.2
+    - name: cube_blue
+      type: box
+      size: [0.02, 0.02, 0.02]
+      pos: [0.22, 0.04, 0.18]
+      color: "#3B82F6"
+      mass: 0.03
+      friction: 1.2
+
+    - {name: box_red_floor, type: box, size: [0.055, 0.055, 0.002], pos: [0.178, -0.13, 0.162], color: "#EF4444", static: true}
+    - {name: box_red_wall_x0, type: box, size: [0.06, 0.005, 0.015], pos: [0.178, -0.185, 0.175], color: "#EF4444", static: true}
+    - {name: box_red_wall_x1, type: box, size: [0.06, 0.005, 0.015], pos: [0.178, -0.075, 0.175], color: "#EF4444", static: true}
+    - {name: box_red_wall_y0, type: box, size: [0.005, 0.06, 0.015], pos: [0.123, -0.13, 0.175], color: "#EF4444", static: true}
+    - {name: box_red_wall_y1, type: box, size: [0.005, 0.06, 0.015], pos: [0.233, -0.13, 0.175], color: "#EF4444", static: true}
+
+    - {name: box_blue_floor, type: box, size: [0.055, 0.055, 0.002], pos: [0.178, 0.13, 0.162], color: "#3B82F6", static: true}
+    - {name: box_blue_wall_x0, type: box, size: [0.06, 0.005, 0.015], pos: [0.178, 0.075, 0.175], color: "#3B82F6", static: true}
+    - {name: box_blue_wall_x1, type: box, size: [0.06, 0.005, 0.015], pos: [0.178, 0.185, 0.175], color: "#3B82F6", static: true}
+    - {name: box_blue_wall_y0, type: box, size: [0.005, 0.06, 0.015], pos: [0.123, 0.13, 0.175], color: "#3B82F6", static: true}
+    - {name: box_blue_wall_y1, type: box, size: [0.005, 0.06, 0.015], pos: [0.233, 0.13, 0.175], color: "#3B82F6", static: true}
+
+robots:
+  - name: arm
+    model: zoo://so101_lerobot
+    pos: [0, 0, 0.16]
+    end_effectors: []
+    controller: ../controllers/so101_policy_eval.py
+    args:
+      # 相对仓库根目录（在仓库根执行 python -m simovia run worlds/... 即可）
+      # 权重需从 Release 下载到该目录，见 README「策略推理评估」
+      model: models/so101_sort2_20k
+      # 必须与训练数据集的 task 字符串完全一致（语言条件输入）
+      task: pick up the red cube and put it into the red box, then pick up the blue cube and put it into the blue box
+      # 训练时 rename_map: wrist_cam->camera1, top->camera2
+      cameras: camera1=wrist_cam,camera2=top
+      max_seconds: 60
+    sensors:
+      - name: wrist_cam
+        type: camera
+        body: camera_mount
+        pos: [0.0, 0.055, -0.045]
+        quat: [0.959662, -0.281157, 0.0, 0.0]
+        fovy: 48.455
+
+task:
+  success:
+    body: cube_red
+    zone: {min: [0.13, -0.18, 0.16], max: [0.23, -0.08, 0.22]}
+  reward:
+    - distance: {a: cube_red, b: arm/gripper, weight: -0.01}
+  max_ticks: 4000              # 60s * 31.25Hz = 1875，留足余量
+
+runtime:
+  realtime: true               # 按墙钟推进，方便在 GUI 里观察动作质量
+  controller_timeout: 400      # 推理 116ms + 两路相机渲染压缩，需放宽
+  timeout_policy: last_ctrl
