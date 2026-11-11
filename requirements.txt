@@ -1,0 +1,10 @@
+# Simovia 内核（按需本地开发时改成 -e 安装）
+simovia @ git+https://github.com/jerryzhu-yc/simovia.git
+
+# 数据集写入（v2.1 采集 + v3.0 升级都需要）
+pyarrow
+
+# PICO 手柄 WebSocket 服务
+websockets
+
+# 说明：ffmpeg / ffprobe 为系统依赖，需自行安装（apt install ffmpeg）

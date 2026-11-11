@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SO-101 PICO 遥操作</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #111; color: #eee;
+         display: flex; flex-direction: column; align-items: center;
+         justify-content: center; height: 100vh; margin: 0; }
+  button { font-size: 22px; padding: 14px 40px; margin: 6px;
+           border-radius: 10px; border: none; }
+  #enter { background: #2a6; color: #fff; }
+  #status { margin-top: 18px; font-size: 15px; color: #9ab;
+            text-align: center; white-space: pre-line; }
+  h1 { font-size: 20px; }
+</style>
+</head>
+<body>
+<h1>SO-101 PICO 遥操作</h1>
+<button id="enter">进入 VR 遥操作</button>
+<div id="status">等待连接…</div>
+<canvas id="gl" hidden></canvas>
+<script>
+"use strict";
+const status = document.getElementById("status");
+const canvas = document.getElementById("gl");
+let ws = null, session = null, refSpace = null;
+let lastSend = 0, lastBuzz = 0;
+
+function setStatus(s) { status.textContent = s; }
+
+function connect() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => setStatus("已连接 PC。戴好头显后点「进入 VR 遥操作」。\n右手柄移动 = 机械臂移动 | 扳机 = 夹爪闭合\nA 键 = 开始/停止录制 | B 键 = 重新校准（手柄当前位置为臂中心）");
+  ws.onclose = () => { setStatus("与 PC 断开，1 秒后重连…");
+                       setTimeout(connect, 1000); };
+  ws.onmessage = (ev) => {
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    if (m.buzz && performance.now() - lastBuzz > 150) {
+      lastBuzz = performance.now();
+      vibrate(m.buzz);
+    }
+    if (m.rec !== undefined) setStatus(m.rec ? "● 录制中（A 停止）" : "○ 空闲（A 开始录制）");
+  };
+}
+connect();
+
+function vibrate(ms) {
+  if (!session) return;
+  for (const src of session.inputSources) {
+    const act = src.gamepad && src.gamepad.vibrationActuator;
+    if (act && act.playEffect)
+      act.playEffect("dual-rumble",
+                     { duration: ms, strongMagnitude: 0.8, weakMagnitude: 0.4 });
+  }
+}
+
+function quatToMat(x, y, z, w) {
+  const n = Math.hypot(x, y, z, w) || 1;
+  x /= n; y /= n; z /= n; w /= n;
+  return [
+    1 - 2 * (y * y + z * z), 2 * (x * y - z * w),     2 * (x * z + y * w),
+    2 * (x * y + z * w),     1 - 2 * (x * x + z * z), 2 * (y * z - x * w),
+    2 * (x * z - y * w),     2 * (y * z + x * w),     1 - 2 * (x * x + y * y),
+  ];
+}
+
+document.getElementById("enter").onclick = async () => {
+  if (!navigator.xr) { setStatus("此浏览器不支持 WebXR"); return; }
+  try {
+    session = await navigator.xr.requestSession("immersive-vr",
+        { optionalFeatures: ["local-floor"] });
+  } catch (e) { setStatus("进入 VR 失败: " + e.message); return; }
+  const gl = canvas.getContext("webgl2", { xrCompatible: true })
+          || canvas.getContext("webgl", { xrCompatible: true });
+  await gl.makeXRCompatible();
+  session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
+  refSpace = await session.requestReferenceSpace("local");
+  session.requestAnimationFrame(onFrame);
+  session.addEventListener("end", () => { session = null;
+                                          setStatus("已退出 VR"); });
+};
+
+function onFrame(time, frame) {
+  if (!session) return;
+  // ---- 右手柄位姿上报（90Hz 渲染循环里节流到 ~60Hz 足够）
+  const now = performance.now();
+  let payload = null;
+  for (const src of session.inputSources) {
+    if (src.handedness !== "right" || !src.gripSpace) continue;
+    const pose = frame.getPose(src.gripSpace, refSpace);
+    if (!pose) continue;
+    const p = pose.transform.position, q = pose.transform.orientation;
+    const gp = src.gamepad;
+    const btn = (i) => !!(gp && gp.buttons[i] && gp.buttons[i].pressed);
+    const val = (i) => (gp && gp.buttons[i]) ? gp.buttons[i].value : 0;
+    payload = {
+      p: [+p.x.toFixed(5), +p.y.toFixed(5), +p.z.toFixed(5)],
+      q: quatToMat(q.x, q.y, q.z, q.w),          // 行主序 3x3 旋转矩阵
+      trig: +val(0).toFixed(3),                  // 扳机 0..1
+      a: btn(4), b: btn(5),                      // A=录制 B=重校准
+      t: +(now / 1000).toFixed(3),
+    };
+  }
+  if (payload && ws && ws.readyState === 1 && now - lastSend > 15) {
+    lastSend = now;
+    ws.send(JSON.stringify(payload));
+  }
+  // ---- 沉浸模式里必须持续渲染：纯色背景 + 简单准星
+  const layer = session.renderState.baseLayer;
+  const gl = layer ? layer.context : null;
+  if (gl) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+    gl.clearColor(0.05, 0.06, 0.09, 1.0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+  }
+  session.requestAnimationFrame(onFrame);
+}
+</script>
+</body>
+</html>

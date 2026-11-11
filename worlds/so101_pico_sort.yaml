@@ -1,0 +1,104 @@
+name: so101_pico_sort           # SO-101 桌面分拣（PICO 遥操作 + SmolVLA 数据采集）
+timestep: 0.002
+ctrl_period: 16                 # 控制周期 0.032s -> 31.25Hz，遥操作延迟减半、数据集 fps 31.25
+gravity: [0, 0, -9.81]
+integrator: implicitfast       # 位置伺服 kp=998，高刚度需隐式积分
+impratio: 10                   # 与模型自带接触刚度一致
+cone: elliptic                 # 与 SO-101 模型原生摩擦锥一致
+
+scene:
+  floor:
+    size: [2.0, 2.0]
+    texture: grid
+    friction: 1.0
+  lights:
+    - {pos: [0, 0, 1.2]}
+
+  # ---- 世界固定机位（第三人称）：45~55° 俯视全桌面 ----
+  # 腕部相机 fovy 只有 48.5°，抓取高度上仅覆盖约 5cm 见方，红/蓝盒完全出画；
+  # SmolVLA 需要「物体 + 目标容器」同框，因此补一路固定俯视。
+  cameras:
+    - name: top
+      pos: [0.419, 0.0, 0.430]  # 场景中心 (0.20,0,0.17) 沿视线退 34cm
+      euler: [0, 40, 90]        # 向下 50° 俯看；绕视线轴 90° 让世界 y 轴
+                                # 落在画面水平方向（否则画面会横躺 90°）
+      fovy: 60
+
+  objects:
+    # ---- 桌子：顶面 z=0.16（桌面 + 四条落地腿），机械臂坐在桌面上 ----
+    - name: table
+      type: box
+      size: [0.30, 0.20, 0.02]
+      pos: [0.20, 0, 0.14]
+      color: "#6B7280"
+      static: true
+    - {name: table_leg_0, type: box, size: [0.025, 0.025, 0.06], pos: [-0.08, -0.17, 0.06], color: "#6B7280", static: true}
+    - {name: table_leg_1, type: box, size: [0.025, 0.025, 0.06], pos: [0.48, -0.17, 0.06], color: "#6B7280", static: true}
+    - {name: table_leg_2, type: box, size: [0.025, 0.025, 0.06], pos: [-0.08, 0.17, 0.06], color: "#6B7280", static: true}
+    - {name: table_leg_3, type: box, size: [0.025, 0.025, 0.06], pos: [0.48, 0.17, 0.06], color: "#6B7280", static: true}
+
+    # ---- 两个 4cm 方块：质量 0.03kg、摩擦 1.2 ----
+    - name: cube_red
+      type: box
+      size: [0.02, 0.02, 0.02]
+      pos: [0.22, -0.04, 0.18]
+      color: "#EF4444"
+      mass: 0.03
+      friction: 1.2
+    - name: cube_blue
+      type: box
+      size: [0.02, 0.02, 0.02]
+      pos: [0.22, 0.04, 0.18]
+      color: "#3B82F6"
+      mass: 0.03
+      friction: 1.2
+
+    # ---- 红盒：居中 0.178,-0.13 ----
+    - {name: box_red_floor, type: box, size: [0.055, 0.055, 0.002], pos: [0.178, -0.13, 0.162], color: "#EF4444", static: true}
+    - {name: box_red_wall_x0, type: box, size: [0.06, 0.005, 0.015], pos: [0.178, -0.185, 0.175], color: "#EF4444", static: true}
+    - {name: box_red_wall_x1, type: box, size: [0.06, 0.005, 0.015], pos: [0.178, -0.075, 0.175], color: "#EF4444", static: true}
+    - {name: box_red_wall_y0, type: box, size: [0.005, 0.06, 0.015], pos: [0.123, -0.13, 0.175], color: "#EF4444", static: true}
+    - {name: box_red_wall_y1, type: box, size: [0.005, 0.06, 0.015], pos: [0.233, -0.13, 0.175], color: "#EF4444", static: true}
+
+    # ---- 蓝盒：居中 0.178,+0.13 ----
+    - {name: box_blue_floor, type: box, size: [0.055, 0.055, 0.002], pos: [0.178, 0.13, 0.162], color: "#3B82F6", static: true}
+    - {name: box_blue_wall_x0, type: box, size: [0.06, 0.005, 0.015], pos: [0.178, 0.075, 0.175], color: "#3B82F6", static: true}
+    - {name: box_blue_wall_x1, type: box, size: [0.06, 0.005, 0.015], pos: [0.178, 0.185, 0.175], color: "#3B82F6", static: true}
+    - {name: box_blue_wall_y0, type: box, size: [0.005, 0.06, 0.015], pos: [0.123, 0.13, 0.175], color: "#3B82F6", static: true}
+    - {name: box_blue_wall_y1, type: box, size: [0.005, 0.06, 0.015], pos: [0.233, 0.13, 0.175], color: "#3B82F6", static: true}
+
+robots:
+  - name: arm
+    model: zoo://so101_lerobot
+    pos: [0, 0, 0.16]          # 贴在桌面上表面、靠后沿
+    end_effectors: []          # 夹爪是模型自带关节，不挂额外夹爪
+    controller: ../controllers/so101_pico_teleop.py
+    args:
+      # 两路图像是新的 features 结构，不能和旧的单路数据集混写（meta 会不一致）
+      dataset: ~/桌面/so101_smolvla_sort2
+      # 任务文本会作为语言条件写进每一集，必须与操作一致；
+      # 旧的 so101_smolvla_dataset_2cam 只录过"红块进红盒"，指令不同，故换新目录
+      task: pick up the red cube and put it into the red box, then pick up the blue cube and put it into the blue box
+      port: 8090                              # PICO 浏览器访问 http://<PC IP>:8090
+      cameras: wrist_cam,top                  # 数据集两路图像：腕部 + 固定俯视
+    sensors:
+      # 腕部相机（官方参数：pos/euler/fovy 见 so101_sort.yaml 注释）
+      - name: wrist_cam
+        type: camera
+        body: camera_mount
+        pos: [0.0, 0.055, -0.045]
+        quat: [0.959662, -0.281157, 0.0, 0.0]
+        fovy: 48.455
+
+task:
+  success:
+    body: cube_red
+    zone: {min: [0.13, -0.18, 0.16], max: [0.23, -0.08, 0.22]}
+  reward:
+    - distance: {a: cube_red, b: arm/gripper, weight: -0.01}
+  max_ticks: 100000             # 遥操作长会话；实际时长由 run --ticks / GUI 控制
+
+runtime:
+  realtime: true               # 遥操作必须按墙钟实时推进，手柄动作才跟手
+  controller_timeout: 400      # 相机采样 RPC（渲染+压缩）可能超过默认 100ms
+  timeout_policy: last_ctrl    # 偶发超时不暂停，沿用最后控制目标

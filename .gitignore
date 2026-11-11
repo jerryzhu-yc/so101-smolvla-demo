@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+MUJOCO_LOG.TXT
+
+# 采集产物 / 训练输出
+so101_smolvla_*/
+outputs/
+*.mp4
