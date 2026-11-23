@@ -18,14 +18,27 @@ so101_pico_teleop.py  ──OSC 操作空间控制──▶  Simovia 内核 (MuJ
 LeRobot v2.1 数据集  ──退出时就地升级──▶  v3.0（lerobot 0.7.0 可直接加载）
 ```
 
+## 目录
+
+- [演示效果](#演示效果) · [依赖](#依赖) · [快速开始](#快速开始) · [操作](#操作)
+- [数据集格式](#数据集格式) · [微调 SmolVLA](#微调-smolvla) · [策略推理评估](#策略推理评估)
+- [常见问题](#常见问题) · [仓库结构](#仓库结构) · [场景参数](#场景参数)
+
+## 演示效果
+
+策略闭环成功片段：[policy_eval.mp4](https://jerryzhu-yc.github.io/simovia/assets/demos/policy_eval.mp4)
+（两路相机 + 语言指令输入，红、蓝方块依次入盒，控制器判定 success=true）。
+
+更多演示（遥操作采集、雷达导航等）见 [Simovia 展示站](https://jerryzhu-yc.github.io/simovia/)。
+
 ## 依赖
 
-- Python 3.10+、`ffmpeg` / `ffprobe`（视频编码与拼接）
-- Simovia 内核：
+- Python 3.11+、`ffmpeg` / `ffprobe`（视频编码与拼接）
+- Simovia 内核 + `pyarrow` + `websockets`，一条命令装齐：
 
 ```bash
-pip install "simovia @ git+https://github.com/jerryzhu-yc/simovia.git"
-# 或本地开发：git clone 后 pip install -e /path/to/simovia
+pip install -r requirements.txt
+# 本地开发 Simovia：git clone 后 pip install -e /path/to/simovia
 ```
 
 - PICO 4 头显（自带浏览器即可，不需要装 APP）
@@ -179,7 +192,51 @@ python -m simovia gui
 
 治本方案是在采集时做域随机化（物体 XY 偏移 + 随机 yaw），重采 100 集左右再训练。
 
-## 目录
+## 常见问题
+
+### PICO 里进不去 VR 遥操作
+
+WebXR 需要安全上下文（HTTPS 或 `localhost`）。局域网直接访问 `http://<PC 的 IP>:8090`
+时多数浏览器会禁用 WebXR。USB 直连做端口转发后打开 `http://localhost:8090` 即可：
+
+```bash
+adb reverse tcp:8090 tcp:8090
+adb shell am start -a android.intent.action.VIEW -d "http://localhost:8090"
+```
+
+或给 PC 配好 HTTPS 证书后用 `https://` 访问。
+
+### 数据集写到哪，怎么换路径
+
+默认 `~/桌面/so101_smolvla_sort2`，改 `worlds/so101_pico_sort.yaml` 里
+`robots[].args.dataset`。同一路径再次启动采集会自动从 `<root>_v21` 回退继续续写。
+
+### 退出后没看到 v3.0，或者想跳过升级
+
+默认退出时自动就地升级，原 v2.1 目录保留为 `<root>_v21`。调参阶段可设
+`SIMOVIA_NO_V30=1` 跳过重拼视频；也可手动转换
+`python -m simovia.lerobot_v30 <root>`。不要用 lerobot 官方的
+`convert_dataset_v21_to_v30`（原因见[数据集格式](#数据集格式)）。
+
+### 训练时报相机路数不对
+
+用 `--rename_map` 把 `wrist_cam` / `top` 映射到 `camera1` / `camera2`；
+**不要**用 `--policy.empty_cameras`，那是「额外追加空相机」，会让期望路数变成 4 路。
+推理时相机顺序按 key 字母序（`top` → camera2，`wrist_cam` → camera1）。
+
+### GUI 的解释器没装 lerobot
+
+推理控制器会自动 `os.execv` 切到装了 lerobot 的解释器（默认
+`~/miniconda3/envs/smolvla/bin/python`，PID 不变、ZMQ 连接保留），可用环境变量
+`SIMOVIA_POLICY_PY` 覆盖。该环境还需 `pip install pyzmq`。
+
+### 为什么换了物体位置就抓不到
+
+数据集里物体初始位置完全固定（`reset_objects` 严格恢复 `qpos0`，无随机化），模型学到
+的是固定布局上的轨迹 + 视觉微调，位置泛化是当前主要短板。治本方案是采集时做域随机化
+（物体 XY 偏移 + 随机 yaw），重采约 100 集再训练。
+
+## 仓库结构
 
 ```
 worlds/so101_pico_sort.yaml        采集世界：桌面、双方块、双盒子、固定俯视机位
@@ -188,6 +245,9 @@ controllers/so101_pico_teleop.py   PICO 遥操作 + OSC + 录制 + 自动复位
 controllers/so101_pico_webxr.html  头显页面（WebXR 手柄采集与回传）
 controllers/so101_policy_eval.py   SmolVLA 推理控制器（chunk 执行 + 相机预览）
 models/so101_sort2_20k/            训练产出的策略配置、归一化统计、tokenizer
+                                    （model.safetensors 走 Release 下载，见上）
+requirements.txt                   依赖清单（simovia + pyarrow + websockets）
+.gitignore                         采集产物 / 训练输出 / mp4 / 大权重忽略规则
 ```
 
 ## 场景参数
